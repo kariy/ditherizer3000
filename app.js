@@ -16,6 +16,8 @@ const elements = {
   previewScrubber: document.getElementById("previewScrubber"),
   previewTimecode: document.getElementById("previewTimecode"),
   previewToggleBtn: document.getElementById("previewToggleBtn"),
+  brightnessInput: document.getElementById("brightnessInput"),
+  brightnessValue: document.getElementById("brightnessValue"),
 };
 
 const DEFAULT_SETTINGS = {
@@ -23,6 +25,7 @@ const DEFAULT_SETTINGS = {
   mix: 0.85,
   pixelSize: 1,
   rampSeconds: 2.5,
+  brightness: 1,
 };
 
 const state = {
@@ -187,7 +190,8 @@ function initializeEffectControls() {
   if (
     !elements.algorithmSelect ||
     !elements.detailInput ||
-    !elements.pixelSizeInput
+    !elements.pixelSizeInput ||
+    !elements.brightnessInput
   ) {
     return;
   }
@@ -195,6 +199,7 @@ function initializeEffectControls() {
   elements.algorithmSelect.value = DEFAULT_SETTINGS.algorithm;
   elements.detailInput.value = String(Math.round(DEFAULT_SETTINGS.mix * 100));
   elements.pixelSizeInput.value = String(DEFAULT_SETTINGS.pixelSize);
+  elements.brightnessInput.value = String(Math.round(DEFAULT_SETTINGS.brightness * 100));
   syncEffectSettingOutputs();
   applyEffectSettingsFromInputs();
 
@@ -208,6 +213,11 @@ function initializeEffectControls() {
   });
 
   elements.pixelSizeInput.addEventListener("input", () => {
+    syncEffectSettingOutputs();
+    applyEffectSettingsFromInputs();
+  });
+
+  elements.brightnessInput.addEventListener("input", () => {
     syncEffectSettingOutputs();
     applyEffectSettingsFromInputs();
   });
@@ -276,6 +286,9 @@ function syncEffectSettingOutputs() {
   if (elements.pixelSizeValue && elements.pixelSizeInput) {
     elements.pixelSizeValue.textContent = `${elements.pixelSizeInput.value}px`;
   }
+  if (elements.brightnessValue && elements.brightnessInput) {
+    elements.brightnessValue.textContent = `${elements.brightnessInput.value}%`;
+  }
 }
 
 function applyEffectSettingsFromInputs() {
@@ -283,6 +296,10 @@ function applyEffectSettingsFromInputs() {
   const pixelSizeValue = Math.max(
     1,
     Number(elements.pixelSizeInput?.value ?? 1)
+  );
+  const brightnessValue = Math.max(
+    0,
+    Number(elements.brightnessInput?.value ?? 100)
   );
 
   state.settings = {
@@ -292,6 +309,9 @@ function applyEffectSettingsFromInputs() {
       ? DEFAULT_SETTINGS.pixelSize
       : pixelSizeValue,
     rampSeconds: DEFAULT_SETTINGS.rampSeconds,
+    brightness: Number.isNaN(brightnessValue)
+      ? DEFAULT_SETTINGS.brightness
+      : brightnessValue / 100,
   };
 }
 
@@ -481,6 +501,7 @@ function drawInstantPreviewFrame() {
   applyDitherPipeline(previewState.ctx, canvas.width, canvas.height, {
     algorithm: settings.algorithm,
     mix: settings.mix,
+    brightness: settings.brightness,
   });
 
   const duration = previewState.videoEl.duration || 0;
@@ -974,6 +995,7 @@ async function renderFramesOnMainThread({ videoEl, ctx, options, onProgress }) {
     mix = DEFAULT_SETTINGS.mix,
     pixelSize = DEFAULT_SETTINGS.pixelSize,
     algorithm = DEFAULT_SETTINGS.algorithm,
+    brightness = DEFAULT_SETTINGS.brightness,
   } = options ?? DEFAULT_SETTINGS;
 
   const rampDuration = Math.max(0.1, rampSeconds);
@@ -1018,6 +1040,7 @@ async function renderFramesOnMainThread({ videoEl, ctx, options, onProgress }) {
         applyDitherPipeline(ctx, width, height, {
           algorithm,
           mix: easedMix,
+          brightness,
         });
 
         onProgress?.(Math.min(1, videoEl.currentTime / duration));
@@ -1055,12 +1078,20 @@ function drawFrameWithPixelation({
   }
 }
 
-function applyDitherPipeline(ctx, width, height, { algorithm, mix }) {
-  if (!algorithm || mix <= 0 || algorithm === "none") {
+function applyDitherPipeline(ctx, width, height, { algorithm, mix, brightness }) {
+  if (!algorithm) {
     return;
   }
-
   const image = ctx.getImageData(0, 0, width, height);
+  const bright = Number.isFinite(brightness) ? brightness : DEFAULT_SETTINGS.brightness;
+  if (bright !== 1) {
+    applyBrightness(image, bright);
+  }
+
+  if (mix <= 0 || algorithm === "none") {
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
 
   switch (algorithm) {
     case "floyd":
@@ -1073,6 +1104,18 @@ function applyDitherPipeline(ctx, width, height, { algorithm, mix }) {
   }
 
   ctx.putImageData(image, 0, 0);
+}
+
+function applyBrightness(image, factor) {
+  if (factor === 1) {
+    return;
+  }
+  const data = image.data;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.max(0, Math.min(255, data[i] * factor));
+    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] * factor));
+    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] * factor));
+  }
 }
 
 function applyOrderedDither(image, mix) {

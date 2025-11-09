@@ -4,6 +4,7 @@ const DEFAULTS = {
   algorithm: "ordered",
   pixelSize: 1,
   smoothFactor: 0.08,
+  brightness: 1,
 };
 
 const ORDERED = 0;
@@ -102,7 +103,7 @@ void main() {
 }
 `;
 
-  const fragmentSource = `
+const fragmentSource = `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D uVideo;
@@ -111,6 +112,7 @@ uniform vec2 uResolution;
 uniform float uPixelSize;
 uniform float uMix;
 uniform int uAlgorithm;
+uniform float uBrightness;
 
 vec2 snapUv(vec2 uv) {
   float pixel = max(uPixelSize, 1.0);
@@ -130,8 +132,9 @@ float orderedThreshold(vec2 fragCoord) {
 
 void main() {
   vec2 fragCoord = vUv * uResolution;
-  vec4 src = texture2D(uVideo, snapUv(vUv));
-  float gray = dot(src.rgb, vec3(0.299, 0.587, 0.114));
+  vec4 srcSample = texture2D(uVideo, snapUv(vUv));
+  vec3 boosted = clamp(srcSample.rgb * uBrightness, 0.0, 1.0);
+  float gray = dot(boosted, vec3(0.299, 0.587, 0.114));
   vec3 target = vec3(gray);
 
   if (uAlgorithm == 0) {
@@ -141,8 +144,8 @@ void main() {
     target = vec3(bw);
   }
 
-  vec3 color = mix(src.rgb, target, clamp(uMix, 0.0, 1.0));
-  gl_FragColor = vec4(color, src.a);
+  vec3 color = mix(boosted, target, clamp(uMix, 0.0, 1.0));
+  gl_FragColor = vec4(color, srcSample.a);
 }
 `;
 
@@ -177,6 +180,7 @@ void main() {
     pixelSize: gl.getUniformLocation(program, "uPixelSize"),
     mix: gl.getUniformLocation(program, "uMix"),
     algorithm: gl.getUniformLocation(program, "uAlgorithm"),
+    brightness: gl.getUniformLocation(program, "uBrightness"),
   };
 
   textures.video = gl.createTexture();
@@ -246,6 +250,10 @@ function drawScene(mixValue) {
   gl.uniform1f(uniforms.pixelSize, Math.max(1, options.pixelSize ?? 1));
   gl.uniform1f(uniforms.mix, clamp01(mixValue));
   gl.uniform1i(uniforms.algorithm, getAlgorithmIndex(options.algorithm));
+  gl.uniform1f(
+    uniforms.brightness,
+    Math.max(0.1, options.brightness ?? DEFAULTS.brightness)
+  );
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   gl.flush();
 }
