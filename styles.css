@@ -219,6 +219,22 @@ button:disabled {
   gap: 0.35rem;
 }
 
+.preview-controls button {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.preview-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 #downloadLink {
   color: #7dffb3;
   text-decoration: none;

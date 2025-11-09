@@ -31,7 +31,7 @@ All processing happens locally in the browser—no files ever leave your machine
 - **Dither Algorithm**: Choose classic 4×4 ordered Bayer, Floyd–Steinberg error diffusion, or disable dithering to only apply pixelation.
 - **Effect Mix**: Blends between the original frame and the dithered frame. Lower values keep more of the source detail.
 - **Pixel Size**: Downsamples the video before dithering to push it toward chunky, low-res art styles.
-- **Instant Preview Scrubber**: Use the slider under the preview canvas to jump to any moment of the clip without restarting the full render.
+- **Instant Preview Controls**: Use the play/pause toggle and scrubber under the preview canvas to audition any moment of the clip without restarting the full render.
 
 ## Notes & Limitations
 

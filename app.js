@@ -15,6 +15,7 @@ const elements = {
   previewStatus: document.getElementById("previewStatus"),
   previewScrubber: document.getElementById("previewScrubber"),
   previewTimecode: document.getElementById("previewTimecode"),
+  previewToggleBtn: document.getElementById("previewToggleBtn"),
 };
 
 const DEFAULT_SETTINGS = {
@@ -40,6 +41,7 @@ const previewState = {
   frameHandle: null,
   frameType: null,
   running: false,
+  playing: false,
   pixelCanvas: null,
   pixelCtx: null,
   pixelBlock: 1,
@@ -62,6 +64,10 @@ function setPreviewControlsEnabled(enabled) {
   if (!enabled) {
     setPreviewTimecode(0, 0);
   }
+  if (elements.previewToggleBtn) {
+    elements.previewToggleBtn.disabled = !enabled;
+    updatePreviewToggleLabel(enabled && previewState.playing);
+  }
 }
 
 function setPreviewTimecode(current, duration) {
@@ -71,6 +77,15 @@ function setPreviewTimecode(current, duration) {
   elements.previewTimecode.textContent = `${formatTime(current)} / ${formatTime(
     duration
   )}`;
+}
+
+function updatePreviewToggleLabel(isPlaying) {
+  if (!elements.previewToggleBtn) {
+    return;
+  }
+  elements.previewToggleBtn.textContent = isPlaying
+    ? "Pause Preview"
+    : "Play Preview";
 }
 
 setPreviewStatus("Select a video to see a quick preview.");
@@ -239,6 +254,19 @@ function initializePreviewControls() {
       commitPreviewScrub();
     }
   });
+
+  if (elements.previewToggleBtn) {
+    elements.previewToggleBtn.addEventListener("click", () => {
+      if (!previewState.running) {
+        return;
+      }
+      if (previewState.playing) {
+        pausePreviewPlayback();
+      } else {
+        resumePreviewPlayback();
+      }
+    });
+  }
 }
 
 function syncEffectSettingOutputs() {
@@ -302,6 +330,7 @@ async function startInstantPreviewPlayback() {
   previewState.videoEl = video;
   previewState.sourceUrl = url;
   previewState.running = true;
+  previewState.playing = true;
   try {
     await video.play();
   } catch (error) {
@@ -309,6 +338,7 @@ async function startInstantPreviewPlayback() {
     throw error;
   }
 
+  updatePreviewToggleLabel(true);
   drawInstantPreviewFrame();
   schedulePreviewFrame();
   setPreviewStatus("Playing preview…");
@@ -316,6 +346,7 @@ async function startInstantPreviewPlayback() {
 
 function stopInstantPreviewPlayback(message) {
   previewState.running = false;
+  previewState.playing = false;
   cancelPreviewFrame();
 
   if (previewState.videoEl) {
@@ -349,6 +380,40 @@ function stopInstantPreviewPlayback(message) {
   setPreviewControlsEnabled(false);
 }
 
+function pausePreviewPlayback() {
+  if (!previewState.running || !previewState.playing || !previewState.videoEl) {
+    return;
+  }
+  previewState.playing = false;
+  cancelPreviewFrame();
+  try {
+    previewState.videoEl.pause();
+  } catch {
+    /* ignore */
+  }
+  updatePreviewToggleLabel(false);
+  setPreviewStatus("Preview paused");
+}
+
+async function resumePreviewPlayback() {
+  if (!previewState.running || previewState.playing || !previewState.videoEl) {
+    return;
+  }
+  previewState.playing = true;
+  try {
+    await previewState.videoEl.play();
+  } catch (error) {
+    previewState.playing = false;
+    console.warn("Failed to resume preview playback", error);
+    setPreviewStatus("Preview unavailable.");
+    return;
+  }
+  updatePreviewToggleLabel(true);
+  drawInstantPreviewFrame();
+  schedulePreviewFrame();
+  setPreviewStatus("Playing preview…");
+}
+
 function cancelPreviewFrame() {
   if (!previewState.frameHandle) {
     return;
@@ -367,7 +432,7 @@ function cancelPreviewFrame() {
 }
 
 function schedulePreviewFrame() {
-  if (!previewState.running || !previewState.videoEl) {
+  if (!previewState.running || !previewState.playing || !previewState.videoEl) {
     return;
   }
   cancelPreviewFrame();
@@ -376,7 +441,7 @@ function schedulePreviewFrame() {
   const onFrame = () => {
     previewState.frameHandle = null;
     drawInstantPreviewFrame();
-    if (previewState.running) {
+    if (previewState.running && previewState.playing) {
       schedulePreviewFrame();
     }
   };
@@ -478,28 +543,56 @@ function updatePreviewScrubberPosition(currentTime, duration) {
 
 function commitPreviewScrub() {
   if (!previewState.videoEl || !elements.previewScrubber) {
-    previewState.pendingScrubTime = null;
     return;
   }
   const duration = previewState.videoEl.duration || 0;
   const value = Number(elements.previewScrubber.value || "0");
   const target = sliderValueToTime(value, duration);
-  seekPreviewVideo(target);
+  seekPreviewVideo(target)
+    .then(() => {
+      if (!previewState.playing) {
+        drawInstantPreviewFrame();
+      }
+    })
+    .catch((error) => {
+      console.warn("Preview seek failed", error);
+    });
 }
 
 function seekPreviewVideo(time) {
   if (!previewState.videoEl || !Number.isFinite(time)) {
-    return;
+    return Promise.resolve();
   }
   const duration = previewState.videoEl.duration || 0;
   const maxTime = duration > 0 ? Math.max(0, duration - 0.02) : undefined;
   const clamped =
     duration > 0 ? Math.max(0, Math.min(maxTime ?? duration, time)) : Math.max(0, time);
-  try {
-    previewState.videoEl.currentTime = clamped;
-  } catch {
-    /* ignore */
+  if (Math.abs((previewState.videoEl.currentTime ?? 0) - clamped) < 0.01) {
+    return Promise.resolve();
   }
+  return new Promise((resolve, reject) => {
+    const video = previewState.videoEl;
+    const cleanup = () => {
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+    };
+    const onSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("Preview seek failed."));
+    };
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    try {
+      video.currentTime = clamped;
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
 }
 
 async function runDitherPipeline() {
