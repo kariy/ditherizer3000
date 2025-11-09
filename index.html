@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Atreus Dither Editor</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Web Video Lab</p>
+          <h1>Ordered Dither Video Editor</h1>
+          <p>
+            Upload any video and let the app remap every frame into a crunchy,
+            high-contrast ordered dither. Everything runs locally in your
+            browser—no uploads, no waiting on servers.
+          </p>
+        </div>
+      </header>
+
+      <section class="upload-panel card">
+        <div class="input-group">
+          <label for="videoInput">Source Video</label>
+          <input id="videoInput" type="file" accept="video/*" />
+          <p class="hint">MP4, WebM, or any browser-supported format.</p>
+        </div>
+      </section>
+
+      <section class="controls card">
+        <button id="generateBtn" class="primary" disabled>
+          Generate Dithered Video
+        </button>
+        <button id="resetBtn" type="button">Reset</button>
+      </section>
+
+      <section class="status card">
+        <p id="statusText">Select a video to begin.</p>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress__bar" id="progressBar"></div>
+        </div>
+      </section>
+
+      <section class="effects card">
+        <h2>Effect Controls</h2>
+        <div class="effect-grid">
+          <div class="input-group">
+            <label for="algorithmSelect">Dither Algorithm</label>
+            <select id="algorithmSelect">
+              <option value="ordered">4×4 Ordered (Bayer)</option>
+              <option value="floyd">Floyd–Steinberg</option>
+              <option value="none">None (pixelate only)</option>
+            </select>
+            <p class="hint">Try Floyd–Steinberg for a grainier, film-like texture.</p>
+          </div>
+          <div class="input-group slider-group">
+            <div class="slider-header">
+              <label for="detailInput">Effect Mix</label>
+              <span id="detailValue">85%</span>
+            </div>
+            <input id="detailInput" type="range" min="0" max="100" value="85" />
+            <p class="hint">Lower values retain more of the original detail.</p>
+          </div>
+          <div class="input-group slider-group">
+            <div class="slider-header">
+              <label for="pixelSizeInput">Pixel Size</label>
+              <span id="pixelSizeValue">1px</span>
+            </div>
+            <input
+              id="pixelSizeInput"
+              type="range"
+              min="1"
+              max="12"
+              step="1"
+              value="1"
+            />
+            <p class="hint">Increase to block up the image before dithering.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="preview card">
+        <div class="preview__header">
+          <h2>Instant Preview</h2>
+          <p id="previewStatus" class="preview__status">
+            Select a video to see a quick preview.
+          </p>
+        </div>
+        <canvas id="instantPreview" width="320" height="180"></canvas>
+      </section>
+
+      <section class="preview card">
+        <div class="preview__header">
+          <h2>Output Preview</h2>
+          <a id="downloadLink" download="dithered-video.webm" hidden>Download video</a>
+        </div>
+        <video id="previewVideo" controls playsinline></video>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
