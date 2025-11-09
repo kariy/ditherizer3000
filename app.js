@@ -93,8 +93,6 @@ function updatePreviewToggleLabel(isPlaying) {
 setPreviewStatus("Select a video to see a quick preview.");
 setPreviewControlsEnabled(false);
 
-const GPU_SUPPORTED_ALGORITHMS = new Set(["ordered", "none"]);
-
 const BAYER_MATRIX = [
   0, 8, 2, 10, //
   12, 4, 14, 6, //
@@ -323,6 +321,8 @@ function applyEffectSettingsFromInputs() {
       ? DEFAULT_SETTINGS.brightness
       : brightnessValue / 100,
   };
+
+  refreshPreviewFrameIfIdle();
 }
 
 async function startInstantPreviewPlayback() {
@@ -649,11 +649,11 @@ async function runDitherPipeline() {
     canvas.width = hiddenVideo.videoWidth;
     canvas.height = hiddenVideo.videoHeight;
 
-    const useGpuWorker = shouldUseGpuWorker(state.settings);
-    const ctx = useGpuWorker
+    const useWorker = shouldUseWorker(state.settings);
+    const ctx = useWorker
       ? null
       : canvas.getContext("2d", { willReadFrequently: true });
-    if (!useGpuWorker && !ctx) {
+    if (!useWorker && !ctx) {
       throw new Error("Unable to acquire 2D canvas context.");
     }
 
@@ -713,7 +713,7 @@ async function runDitherPipeline() {
 
       const effectConfig = { ...state.settings };
 
-      if (useGpuWorker) {
+      if (useWorker) {
         try {
           await renderFramesWithWorker({
             videoEl: hiddenVideo,
@@ -723,7 +723,7 @@ async function runDitherPipeline() {
           });
         } catch (workerError) {
           console.warn(
-            "GPU worker pipeline failed, falling back to CPU renderer.",
+            "Worker pipeline failed, falling back to main-thread renderer.",
             workerError
           );
           await renderFramesOnMainThread({
@@ -880,6 +880,17 @@ function timeToSliderValue(time, duration) {
   return Math.round(ratio * 1000);
 }
 
+function refreshPreviewFrameIfIdle() {
+  if (
+    previewState.running &&
+    !previewState.playing &&
+    previewState.videoEl &&
+    previewState.ctx
+  ) {
+    drawInstantPreviewFrame();
+  }
+}
+
 function supportsWorkerRendering() {
   return (
     typeof Worker !== "undefined" &&
@@ -890,11 +901,8 @@ function supportsWorkerRendering() {
   );
 }
 
-function shouldUseGpuWorker(settings) {
-  const algorithm = settings?.algorithm ?? DEFAULT_SETTINGS.algorithm;
-  return (
-    GPU_SUPPORTED_ALGORITHMS.has(algorithm) && supportsWorkerRendering()
-  );
+function shouldUseWorker() {
+  return supportsWorkerRendering();
 }
 
 async function renderFramesWithWorker({ videoEl, canvas, options, onProgress }) {

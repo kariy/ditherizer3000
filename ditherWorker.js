@@ -3,12 +3,9 @@ const DEFAULTS = {
   mix: 0.85,
   algorithm: "ordered",
   pixelSize: 1,
-  smoothFactor: 0.08,
   brightness: 1,
+  smoothFactor: 0.08,
 };
-
-const ORDERED = 0;
-const NO_DITHER = 1;
 
 const BAYER_MATRIX = [
   0, 8, 2, 10, //
@@ -17,17 +14,16 @@ const BAYER_MATRIX = [
   15, 7, 13, 5,
 ];
 
-let gl = null;
-let program = null;
-let buffers = {};
-let textures = {};
-let uniforms = {};
+let ctx = null;
 let width = 0;
 let height = 0;
 let options = { ...DEFAULTS };
 let easedMix = 0;
+let pixelCanvas = null;
+let pixelCtx = null;
+let pixelBlock = 1;
 
-self.addEventListener("message", (event) => {
+self.addEventListener("message", async (event) => {
   const { data } = event;
   if (!data || typeof data.type !== "string") {
     return;
@@ -35,19 +31,14 @@ self.addEventListener("message", (event) => {
 
   switch (data.type) {
     case "init":
-      initializeRenderer(data);
+      handleInit(data);
       break;
     case "frame":
-      renderFrame(data).catch((error) => {
-        postMessage({
-          type: "error",
-          error: error?.message ?? "Worker failed while rendering frame.",
-        });
-      });
+      await handleFrame(data);
       break;
     case "finish":
       dispose();
-      postMessage({ type: "finished" });
+      self.postMessage({ type: "finished" });
       break;
     case "updateOptions":
       options = { ...options, ...(data.options ?? {}) };
@@ -57,255 +48,185 @@ self.addEventListener("message", (event) => {
   }
 });
 
-function initializeRenderer(payload) {
+function handleInit(payload) {
   const { canvas, width: w, height: h, options: initialOptions } = payload;
   width = w;
   height = h;
   options = { ...DEFAULTS, ...(initialOptions ?? {}) };
   easedMix = 0;
 
-  try {
-    setupWebGL(canvas);
-    postMessage({ type: "ready" });
-  } catch (error) {
-    dispose();
-    postMessage({
+  ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    self.postMessage({
       type: "error",
-      error: error?.message ?? "Unable to initialize WebGL worker.",
+      error: "Unable to acquire 2D context in worker.",
     });
-  }
-}
-
-function setupWebGL(canvas) {
-  gl =
-    canvas.getContext("webgl2", {
-      preserveDrawingBuffer: true,
-      premultipliedAlpha: false,
-    }) ||
-    canvas.getContext("webgl", {
-      preserveDrawingBuffer: true,
-      premultipliedAlpha: false,
-    });
-
-  if (!gl) {
-    throw new Error("WebGL is not available inside the worker.");
+    return;
   }
 
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-
-  const vertexSource = `
-attribute vec2 aPosition;
-attribute vec2 aUv;
-varying vec2 vUv;
-void main() {
-  vUv = aUv;
-  gl_Position = vec4(aPosition, 0.0, 1.0);
-}
-`;
-
-const fragmentSource = `
-precision highp float;
-varying vec2 vUv;
-uniform sampler2D uVideo;
-uniform sampler2D uBayer;
-uniform vec2 uResolution;
-uniform float uPixelSize;
-uniform float uMix;
-uniform int uAlgorithm;
-uniform float uBrightness;
-
-vec2 snapUv(vec2 uv) {
-  float pixel = max(uPixelSize, 1.0);
-  if (pixel <= 1.0) {
-    return uv;
-  }
-  vec2 grid = uResolution / pixel;
-  vec2 snapped = (floor(uv * grid) + 0.5) / grid;
-  return snapped;
+  configurePixelation();
+  self.postMessage({ type: "ready" });
 }
 
-float orderedThreshold(vec2 fragCoord) {
-  vec2 cell = mod(fragCoord, 4.0);
-  vec2 lookup = (cell + 0.5) / 4.0;
-  return texture2D(uBayer, lookup).r;
-}
-
-void main() {
-  vec2 fragCoord = vUv * uResolution;
-  vec4 srcSample = texture2D(uVideo, snapUv(vUv));
-  vec3 boosted = clamp(srcSample.rgb * uBrightness, 0.0, 1.0);
-  float gray = dot(boosted, vec3(0.299, 0.587, 0.114));
-  vec3 target = vec3(gray);
-
-  if (uAlgorithm == 0) {
-    float threshold = orderedThreshold(fragCoord) - 0.5;
-    float adjusted = gray + threshold * (0.9 * uMix + 0.1);
-    float bw = adjusted < 0.5 ? 0.0 : 1.0;
-    target = vec3(bw);
+function configurePixelation() {
+  pixelBlock = Math.max(1, Math.floor(options.pixelSize ?? 1));
+  if (pixelBlock <= 1) {
+    pixelCanvas = null;
+    pixelCtx = null;
+    return;
   }
 
-  vec3 color = mix(boosted, target, clamp(uMix, 0.0, 1.0));
-  gl_FragColor = vec4(color, srcSample.a);
-}
-`;
-
-  program = createProgram(gl, vertexSource, fragmentSource);
-  gl.useProgram(program);
-
-  const data = new Float32Array([
-    -1, -1, 0, 0,
-    1, -1, 1, 0,
-    -1, 1, 0, 1,
-    1, 1, 1, 1,
-  ]);
-
-  buffers.quad = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.quad);
-  gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-
-  const aPosition = gl.getAttribLocation(program, "aPosition");
-  const aUv = gl.getAttribLocation(program, "aUv");
-  const stride = 4 * Float32Array.BYTES_PER_ELEMENT;
-
-  gl.enableVertexAttribArray(aPosition);
-  gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, stride, 0);
-
-  gl.enableVertexAttribArray(aUv);
-  gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, stride, 2 * Float32Array.BYTES_PER_ELEMENT);
-
-  uniforms = {
-    video: gl.getUniformLocation(program, "uVideo"),
-    bayer: gl.getUniformLocation(program, "uBayer"),
-    resolution: gl.getUniformLocation(program, "uResolution"),
-    pixelSize: gl.getUniformLocation(program, "uPixelSize"),
-    mix: gl.getUniformLocation(program, "uMix"),
-    algorithm: gl.getUniformLocation(program, "uAlgorithm"),
-    brightness: gl.getUniformLocation(program, "uBrightness"),
-  };
-
-  textures.video = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, textures.video);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-  textures.bayer = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, textures.bayer);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA,
-    4,
-    4,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    createBayerTextureData()
+  pixelCanvas = new OffscreenCanvas(
+    Math.max(1, Math.floor(width / pixelBlock)),
+    Math.max(1, Math.floor(height / pixelBlock))
   );
-
-  gl.useProgram(program);
-  gl.uniform1i(uniforms.video, 0);
-  gl.uniform1i(uniforms.bayer, 1);
-  gl.uniform2f(uniforms.resolution, width, height);
+  pixelCtx = pixelCanvas.getContext("2d");
 }
 
-async function renderFrame(payload) {
-  if (!gl || !program) {
-    throw new Error("WebGL context is not ready.");
+async function handleFrame(payload) {
+  if (!ctx || !payload?.bitmap) {
+    return;
   }
+
   const { bitmap, currentTime = 0, duration = 0 } = payload;
-  uploadBitmap(bitmap);
-  bitmap.close();
+  try {
+    drawFrame(bitmap);
+    bitmap.close();
 
-  const rampSeconds = Math.max(0.1, options.rampSeconds ?? DEFAULTS.rampSeconds);
-  const ramp = duration > 0 ? Math.min(1, currentTime / rampSeconds) : 1;
-  const targetMix = clamp01(ramp * (options.mix ?? DEFAULTS.mix));
-  const smooth = clamp01(options.smoothFactor ?? DEFAULTS.smoothFactor);
-  easedMix = lerp(easedMix, targetMix, smooth);
+    const rampSeconds = Math.max(0.1, options.rampSeconds ?? DEFAULTS.rampSeconds);
+    const ramp = duration > 0 ? Math.min(1, currentTime / rampSeconds) : 1;
+    const targetMix = clamp01(ramp * (options.mix ?? DEFAULTS.mix));
+    const smooth = clamp01(options.smoothFactor ?? DEFAULTS.smoothFactor);
+    easedMix = lerp(easedMix, targetMix, smooth);
 
-  drawScene(easedMix);
+    applyPipeline(easedMix);
 
-  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
-  const done = duration > 0 && currentTime >= duration;
-  postMessage({ type: "frameRendered", progress, done });
-}
-
-function uploadBitmap(bitmap) {
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, textures.video);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-}
-
-function drawScene(mixValue) {
-  gl.viewport(0, 0, width, height);
-  gl.useProgram(program);
-  gl.uniform2f(uniforms.resolution, width, height);
-  gl.uniform1f(uniforms.pixelSize, Math.max(1, options.pixelSize ?? 1));
-  gl.uniform1f(uniforms.mix, clamp01(mixValue));
-  gl.uniform1i(uniforms.algorithm, getAlgorithmIndex(options.algorithm));
-  gl.uniform1f(
-    uniforms.brightness,
-    Math.max(0.1, options.brightness ?? DEFAULTS.brightness)
-  );
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  gl.flush();
-}
-
-function createProgram(gl, vertexSource, fragmentSource) {
-  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
-  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
-  const shaderProgram = gl.createProgram();
-  gl.attachShader(shaderProgram, vertexShader);
-  gl.attachShader(shaderProgram, fragmentShader);
-  gl.linkProgram(shaderProgram);
-
-  if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
-    const log = gl.getProgramInfoLog(shaderProgram);
-    gl.deleteProgram(shaderProgram);
-    throw new Error(`Failed to link shader program: ${log}`);
+    const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+    const done = duration > 0 && currentTime >= duration;
+    self.postMessage({ type: "frameRendered", progress, done });
+  } catch (error) {
+    self.postMessage({
+      type: "error",
+      error: error?.message ?? "Worker frame processing failed.",
+    });
   }
-  return shaderProgram;
 }
 
-function compileShader(gl, type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(shader);
-    gl.deleteShader(shader);
-    throw new Error(`Shader compilation failed: ${log}`);
+function drawFrame(bitmap) {
+  if (pixelBlock > 1 && pixelCanvas && pixelCtx) {
+    pixelCtx.drawImage(bitmap, 0, 0, pixelCanvas.width, pixelCanvas.height);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(pixelCanvas, 0, 0, width, height);
+    ctx.restore();
+  } else {
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(bitmap, 0, 0, width, height);
   }
-  return shader;
 }
 
-function createBayerTextureData() {
-  const data = new Uint8Array(4 * 4 * 4);
-  for (let i = 0; i < 16; i += 1) {
-    const value = Math.round((BAYER_MATRIX[i] / 16) * 255);
-    const offset = i * 4;
-    data[offset] = value;
-    data[offset + 1] = value;
-    data[offset + 2] = value;
-    data[offset + 3] = 255;
+function applyPipeline(mixValue) {
+  const image = ctx.getImageData(0, 0, width, height);
+  const brightness = Number.isFinite(options.brightness)
+    ? options.brightness
+    : DEFAULTS.brightness;
+  if (brightness !== 1) {
+    applyBrightness(image, brightness);
   }
-  return data;
-}
 
-function getAlgorithmIndex(algorithm) {
+  const algorithm = options.algorithm ?? DEFAULTS.algorithm;
+  const mix = mixValue;
+
+  if (mix <= 0 || algorithm === "none") {
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
+
   switch (algorithm) {
+    case "floyd":
+      applyFloydSteinberg(image, mix);
+      break;
     case "ordered":
-      return ORDERED;
-    case "none":
     default:
-      return NO_DITHER;
+      applyOrdered(image, mix);
+      break;
+  }
+
+  ctx.putImageData(image, 0, 0);
+}
+
+function applyBrightness(image, factor) {
+  const data = image.data;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.max(0, Math.min(255, data[i] * factor));
+    data[i + 1] = Math.max(0, Math.min(255, data[i + 1] * factor));
+    data[i + 2] = Math.max(0, Math.min(255, data[i + 2] * factor));
+  }
+}
+
+function applyOrdered(image, mix) {
+  const { data, width, height } = image;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * 4;
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const gray = Math.min(255, 0.299 * r + 0.587 * g + 0.114 * b);
+
+      const threshold =
+        (BAYER_MATRIX[((y & 3) << 2) + (x & 3)] + 0.5) / 16 - 0.5;
+      const adjusted = gray + threshold * 255 * mix;
+      const bw = adjusted < 128 ? 0 : 255;
+
+      data[idx] = lerp(r, bw, mix);
+      data[idx + 1] = lerp(g, bw, mix);
+      data[idx + 2] = lerp(b, bw, mix);
+    }
+  }
+}
+
+function applyFloydSteinberg(image, mix) {
+  const { data, width, height } = image;
+  const totalPixels = width * height;
+  const buffer = new Float32Array(totalPixels);
+
+  for (let i = 0; i < totalPixels; i += 1) {
+    const idx = i * 4;
+    buffer[i] =
+      0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+  }
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = y * width + x;
+      const oldPixel = buffer[idx];
+      const newPixel = oldPixel < 128 ? 0 : 255;
+      const error = oldPixel - newPixel;
+      buffer[idx] = newPixel;
+
+      if (x + 1 < width) {
+        buffer[idx + 1] += (error * 7) / 16;
+      }
+      if (y + 1 < height) {
+        if (x > 0) {
+          buffer[idx + width - 1] += (error * 3) / 16;
+        }
+        buffer[idx + width] += (error * 5) / 16;
+        if (x + 1 < width) {
+          buffer[idx + width + 1] += error / 16;
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < totalPixels; i += 1) {
+    const idx = i * 4;
+    const bw = buffer[i] < 128 ? 0 : 255;
+    data[idx] = lerp(data[idx], bw, mix);
+    data[idx + 1] = lerp(data[idx + 1], bw, mix);
+    data[idx + 2] = lerp(data[idx + 2], bw, mix);
   }
 }
 
@@ -321,24 +242,8 @@ function clamp01(value) {
 }
 
 function dispose() {
-  if (gl) {
-    if (buffers.quad) {
-      gl.deleteBuffer(buffers.quad);
-    }
-    if (textures.video) {
-      gl.deleteTexture(textures.video);
-    }
-    if (textures.bayer) {
-      gl.deleteTexture(textures.bayer);
-    }
-    if (program) {
-      gl.deleteProgram(program);
-    }
-  }
-  gl = null;
-  program = null;
-  buffers = {};
-  textures = {};
-  uniforms = {};
+  ctx = null;
+  pixelCanvas = null;
+  pixelCtx = null;
   easedMix = 0;
 }
