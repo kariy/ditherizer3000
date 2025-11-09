@@ -15,7 +15,7 @@ A browser-based mini video editor that remaps every frame of a video into a dith
 2. Open the served URL (e.g. `http://localhost:4173`) in a recent Chromium or Firefox build that supports `MediaRecorder` and `canvas.captureStream`.
 3. Upload a source video file.
 4. Adjust the effect controls (algorithm, mix, pixel size) to taste.
-5. Hit **Generate Dithered Video** and wait for the preview to appear. Download the resulting WebM when you are happy with it.
+5. Hit **Generate Dithered Video** and wait for the download link to appear. Grab the resulting WebM when you are happy with it.
 
 All processing happens locally in the browser—no files ever leave your machine.
 
@@ -24,7 +24,7 @@ All processing happens locally in the browser—no files ever leave your machine
 - The source video plays through a hidden `<video>` element. Every frame is drawn to an off-screen `<canvas>`, and a lightweight instant preview streams the full clip at low resolution so you can tune settings without waiting.
 - Ordered/none modes run inside an `OffscreenCanvas` WebGL worker that pixelates and dithers frames via a fragment shader, keeping the UI responsive while MediaRecorder captures the stream.
 - Floyd–Steinberg currently falls back to the CPU renderer because the algorithm is iterative and harder to express as a single shader pass.
-- The canvas stream is combined with the video's audio (if tap-able) and recorded via `MediaRecorder`. When the playback finishes, the recorded blob becomes the downloadable preview.
+- The canvas stream is combined with the video's audio (if tap-able) and recorded via `MediaRecorder`. When the capture finishes, the recorded blob becomes the downloadable file exposed by the app.
 
 ## Tuning the Effect
 

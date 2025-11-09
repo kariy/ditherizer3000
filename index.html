@@ -33,6 +33,7 @@
           Generate Dithered Video
         </button>
         <button id="resetBtn" type="button">Reset</button>
+        <a id="downloadLink" download="dithered-video.webm" hidden>Download video</a>
       </section>
 
       <section class="status card">
@@ -118,13 +119,6 @@
         </div>
       </section>
 
-      <section class="preview card">
-        <div class="preview__header">
-          <h2>Output Preview</h2>
-          <a id="downloadLink" download="dithered-video.webm" hidden>Download video</a>
-        </div>
-        <video id="previewVideo" controls playsinline></video>
-      </section>
     </main>
 
     <script type="module" src="app.js"></script>

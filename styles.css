@@ -177,8 +177,7 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-#instantPreview,
-#previewVideo {
+#instantPreview {
   width: 100%;
   border-radius: 0.8rem;
   background: #000;
@@ -190,10 +189,6 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.08);
   min-height: 180px;
   cursor: pointer;
-}
-
-#previewVideo {
-  min-height: 220px;
 }
 
 #previewStatus {

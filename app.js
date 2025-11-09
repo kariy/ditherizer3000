@@ -4,7 +4,6 @@ const elements = {
   resetBtn: document.getElementById("resetBtn"),
   statusText: document.getElementById("statusText"),
   progressBar: document.getElementById("progressBar"),
-  previewVideo: document.getElementById("previewVideo"),
   downloadLink: document.getElementById("downloadLink"),
   algorithmSelect: document.getElementById("algorithmSelect"),
   detailInput: document.getElementById("detailInput"),
@@ -176,8 +175,6 @@ function resetWorkspace() {
     state.outputUrl = null;
   }
   elements.videoInput.value = "";
-  elements.previewVideo.removeAttribute("src");
-  elements.previewVideo.load();
   elements.downloadLink.hidden = true;
   elements.downloadLink.removeAttribute("href");
   updateStatus("Workspace cleared. Select a video to begin.");
@@ -1203,11 +1200,6 @@ function displayResult(blob) {
   }
   const url = URL.createObjectURL(blob);
   state.outputUrl = url;
-  elements.previewVideo.src = url;
-  elements.previewVideo.load();
-  elements.previewVideo.play().catch(() => {
-    /* autoplay might be blocked */
-  });
   elements.downloadLink.href = url;
   elements.downloadLink.hidden = false;
 }
