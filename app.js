@@ -265,6 +265,19 @@ function initializePreviewControls() {
     }
   });
 
+  if (elements.instantPreviewCanvas) {
+    elements.instantPreviewCanvas.addEventListener("click", () => {
+      if (!previewState.running) {
+        return;
+      }
+      if (previewState.playing) {
+        pausePreviewPlayback();
+      } else {
+        resumePreviewPlayback();
+      }
+    });
+  }
+
   if (elements.previewToggleBtn) {
     elements.previewToggleBtn.addEventListener("click", () => {
       if (!previewState.running) {

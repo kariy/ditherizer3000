@@ -32,7 +32,7 @@ All processing happens locally in the browser—no files ever leave your machine
 - **Effect Mix**: Blends between the original frame and the dithered frame. Lower values keep more of the source detail.
 - **Pixel Size**: Downsamples the video before dithering to push it toward chunky, low-res art styles.
 - **Brightness**: Multiplies the frame before dithering so you can crush blacks or lift shadows without leaving the browser.
-- **Instant Preview Controls**: Use the play/pause toggle and scrubber under the preview canvas to audition any moment of the clip without restarting the full render.
+- **Instant Preview Controls**: Click the preview canvas (or use the toggle button) to play/pause, and drag the scrubber to audition any moment without restarting the full render.
 
 ## Notes & Limitations
 
