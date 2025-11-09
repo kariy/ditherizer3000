@@ -33,8 +33,14 @@ const previewState = {
   ctx:
     elements.instantPreviewCanvas?.getContext("2d", { willReadFrequently: true }) ??
     null,
-  requestId: 0,
-  debounceHandle: null,
+  videoEl: null,
+  sourceUrl: null,
+  frameHandle: null,
+  frameType: null,
+  running: false,
+  pixelCanvas: null,
+  pixelCtx: null,
+  pixelBlock: 1,
 };
 
 function setPreviewStatus(message) {
@@ -62,7 +68,14 @@ elements.videoInput.addEventListener("change", (event) => {
       : "Video removed. Select new files to continue."
   );
   refreshControls();
-  scheduleInstantPreview();
+  if (state.videoFile) {
+    startInstantPreviewPlayback().catch((error) => {
+      console.warn("Instant preview playback failed", error);
+      stopInstantPreviewPlayback("Preview unavailable.");
+    });
+  } else {
+    stopInstantPreviewPlayback("Select a video to see a quick preview.");
+  }
 });
 
 elements.generateBtn.addEventListener("click", async () => {
@@ -126,7 +139,7 @@ function resetWorkspace() {
   updateStatus("Workspace cleared. Select a video to begin.");
   updateProgress(0);
   refreshControls();
-  clearInstantPreview("Select a video to see a quick preview.");
+  stopInstantPreviewPlayback("Select a video to see a quick preview.");
 }
 
 function initializeEffectControls() {
@@ -183,154 +196,193 @@ function applyEffectSettingsFromInputs() {
       : pixelSizeValue,
     rampSeconds: DEFAULT_SETTINGS.rampSeconds,
   };
-
-  scheduleInstantPreview();
 }
 
-function scheduleInstantPreview() {
-  if (!previewState.ctx || !elements.instantPreviewCanvas) {
+async function startInstantPreviewPlayback() {
+  if (!previewState.ctx || !elements.instantPreviewCanvas || !state.videoFile) {
+    stopInstantPreviewPlayback("Select a video to see a quick preview.");
     return;
   }
-  if (!state.videoFile) {
-    clearInstantPreview("Select a video to see a quick preview.");
-    return;
+
+  stopInstantPreviewPlayback();
+  setPreviewStatus("Preparing preview...");
+
+  const url = URL.createObjectURL(state.videoFile);
+  const video = document.createElement("video");
+  video.src = url;
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.preload = "auto";
+
+  try {
+    await waitForEvent(video, "loadedmetadata");
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    setPreviewStatus("Preview unavailable.");
+    throw error;
   }
-  if (previewState.debounceHandle) {
-    clearTimeout(previewState.debounceHandle);
+
+  fitPreviewCanvasToVideo(video);
+
+  previewState.videoEl = video;
+  previewState.sourceUrl = url;
+  previewState.running = true;
+  try {
+    await video.play();
+  } catch (error) {
+    stopInstantPreviewPlayback("Preview unavailable.");
+    throw error;
   }
-  previewState.debounceHandle = setTimeout(() => {
-    previewState.debounceHandle = null;
-    runInstantPreview().catch((error) => {
-      console.warn("Instant preview failed", error);
-      setPreviewStatus("Preview unavailable.");
-    });
-  }, 200);
+
+  drawInstantPreviewFrame();
+  schedulePreviewFrame();
+  setPreviewStatus("Playing preview…");
 }
 
-function clearInstantPreview(message) {
+function stopInstantPreviewPlayback(message) {
+  previewState.running = false;
+  cancelPreviewFrame();
+
+  if (previewState.videoEl) {
+    try {
+      previewState.videoEl.pause();
+    } catch {
+      /* ignore */
+    }
+    previewState.videoEl.removeAttribute("src");
+    previewState.videoEl.load();
+    previewState.videoEl = null;
+  }
+
+  if (previewState.sourceUrl) {
+    URL.revokeObjectURL(previewState.sourceUrl);
+    previewState.sourceUrl = null;
+  }
+
+  previewState.pixelCanvas = null;
+  previewState.pixelCtx = null;
+  previewState.pixelBlock = 1;
+
   const canvas = elements.instantPreviewCanvas;
-  const ctx = previewState.ctx;
-  if (canvas && ctx) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (canvas && previewState.ctx) {
+    previewState.ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
+
   if (typeof message === "string") {
     setPreviewStatus(message);
   }
 }
 
-async function runInstantPreview() {
-  if (!previewState.ctx || !elements.instantPreviewCanvas || !state.videoFile) {
+function cancelPreviewFrame() {
+  if (!previewState.frameHandle) {
     return;
   }
+  if (
+    previewState.frameType === "video" &&
+    previewState.videoEl &&
+    typeof previewState.videoEl.cancelVideoFrameCallback === "function"
+  ) {
+    previewState.videoEl.cancelVideoFrameCallback(previewState.frameHandle);
+  } else if (previewState.frameType === "raf") {
+    cancelAnimationFrame(previewState.frameHandle);
+  }
+  previewState.frameHandle = null;
+  previewState.frameType = null;
+}
 
-  const token = ++previewState.requestId;
-  const file = state.videoFile;
-  const settings = { ...state.settings };
-  setPreviewStatus("Rendering preview...");
+function schedulePreviewFrame() {
+  if (!previewState.running || !previewState.videoEl) {
+    return;
+  }
+  cancelPreviewFrame();
 
-  const url = URL.createObjectURL(file);
-  const video = document.createElement("video");
-  video.src = url;
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-
-  try {
-    await waitForEvent(video, "loadeddata");
-
-    if (token !== previewState.requestId) {
-      return;
+  const video = previewState.videoEl;
+  const onFrame = () => {
+    previewState.frameHandle = null;
+    drawInstantPreviewFrame();
+    if (previewState.running) {
+      schedulePreviewFrame();
     }
+  };
 
-    const duration = video.duration || 0;
-    const sampleTime = duration > 0 ? Math.min(duration * 0.05, duration - 0.01) : 0;
-    if (sampleTime > 0 && Math.abs(video.currentTime - sampleTime) > 0.01) {
-      await seekVideo(video, sampleTime);
-    }
-
-    if (token !== previewState.requestId) {
-      return;
-    }
-
-    const canvas = elements.instantPreviewCanvas;
-    const ctx = previewState.ctx;
-    const maxWidth = 360;
-    const sourceWidth = video.videoWidth || maxWidth;
-    const sourceHeight = video.videoHeight || Math.round(maxWidth * (9 / 16));
-    const aspect = sourceHeight ? sourceWidth / sourceHeight : 16 / 9;
-    const targetWidth = Math.max(1, Math.min(maxWidth, sourceWidth));
-    const targetHeight = Math.max(1, Math.round(targetWidth / (aspect || 1.777)));
-
-    canvas.width = targetWidth;
-    canvas.height = targetHeight;
-
-    const pixelBlock = Math.max(1, Math.floor(settings.pixelSize));
-    let pixelCanvas = null;
-    let pixelCtx = null;
-    if (pixelBlock > 1) {
-      pixelCanvas = document.createElement("canvas");
-      pixelCanvas.width = Math.max(1, Math.floor(targetWidth / pixelBlock));
-      pixelCanvas.height = Math.max(1, Math.floor(targetHeight / pixelBlock));
-      pixelCtx = pixelCanvas.getContext("2d") ?? null;
-      if (!pixelCtx) {
-        pixelCanvas = null;
-      }
-    }
-
-    drawFrameWithPixelation({
-      ctx,
-      source: video,
-      width: targetWidth,
-      height: targetHeight,
-      pixelBlock,
-      pixelCanvas,
-      pixelCtx,
-    });
-
-    applyDitherPipeline(ctx, targetWidth, targetHeight, {
-      algorithm: settings.algorithm,
-      mix: settings.mix,
-    });
-
-    if (token === previewState.requestId) {
-      setPreviewStatus("Instant preview (first frame)");
-    }
-  } catch (error) {
-    if (token === previewState.requestId) {
-      setPreviewStatus("Preview unavailable.");
-    }
-    throw error;
-  } finally {
-    video.pause();
-    URL.revokeObjectURL(url);
+  if (typeof video.requestVideoFrameCallback === "function") {
+    previewState.frameType = "video";
+    previewState.frameHandle = video.requestVideoFrameCallback(onFrame);
+  } else {
+    previewState.frameType = "raf";
+    previewState.frameHandle = requestAnimationFrame(onFrame);
   }
 }
 
-function seekVideo(videoEl, time) {
-  return new Promise((resolve, reject) => {
-    const onSeeked = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("Failed to seek video for preview."));
-    };
-    const cleanup = () => {
-      videoEl.removeEventListener("seeked", onSeeked);
-      videoEl.removeEventListener("error", onError);
-    };
+function drawInstantPreviewFrame() {
+  if (!previewState.running || !previewState.videoEl || !previewState.ctx) {
+    return;
+  }
+  const canvas = elements.instantPreviewCanvas;
+  if (!canvas) {
+    return;
+  }
 
-    videoEl.addEventListener("seeked", onSeeked);
-    videoEl.addEventListener("error", onError);
+  const settings = state.settings;
+  const pixelBlock = Math.max(1, Math.floor(settings.pixelSize));
+  ensurePreviewPixelBuffers(canvas.width, canvas.height, pixelBlock);
 
-    try {
-      videoEl.currentTime = Math.max(0, time);
-    } catch (error) {
-      cleanup();
-      reject(error);
-    }
+  drawFrameWithPixelation({
+    ctx: previewState.ctx,
+    source: previewState.videoEl,
+    width: canvas.width,
+    height: canvas.height,
+    pixelBlock,
+    pixelCanvas: previewState.pixelCanvas,
+    pixelCtx: previewState.pixelCtx,
   });
+
+  applyDitherPipeline(previewState.ctx, canvas.width, canvas.height, {
+    algorithm: settings.algorithm,
+    mix: settings.mix,
+  });
+}
+
+function ensurePreviewPixelBuffers(width, height, pixelBlock) {
+  if (pixelBlock <= 1) {
+    previewState.pixelCanvas = null;
+    previewState.pixelCtx = null;
+    previewState.pixelBlock = 1;
+    return;
+  }
+
+  if (previewState.pixelCanvas && previewState.pixelBlock === pixelBlock) {
+    return;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.floor(width / pixelBlock));
+  canvas.height = Math.max(1, Math.floor(height / pixelBlock));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    previewState.pixelCanvas = null;
+    previewState.pixelCtx = null;
+    previewState.pixelBlock = 1;
+    return;
+  }
+
+  previewState.pixelCanvas = canvas;
+  previewState.pixelCtx = ctx;
+  previewState.pixelBlock = pixelBlock;
+}
+
+function fitPreviewCanvasToVideo(video) {
+  const canvas = elements.instantPreviewCanvas;
+  if (!canvas || !video.videoWidth || !video.videoHeight) {
+    return;
+  }
+  const maxWidth = 400;
+  const aspect = video.videoWidth / video.videoHeight;
+  const width = Math.max(160, Math.min(maxWidth, video.videoWidth));
+  const height = Math.max(90, Math.round(width / aspect));
+  canvas.width = width;
+  canvas.height = height;
 }
 
 async function runDitherPipeline() {
