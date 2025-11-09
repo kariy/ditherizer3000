@@ -201,6 +201,24 @@ button:disabled {
   margin: 0;
 }
 
+#previewScrubber {
+  width: 100%;
+  accent-color: #7d7fff;
+}
+
+#previewTimecode {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: right;
+}
+
+.preview-controls {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
 #downloadLink {
   color: #7dffb3;
   text-decoration: none;

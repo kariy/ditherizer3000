@@ -13,6 +13,8 @@ const elements = {
   pixelSizeValue: document.getElementById("pixelSizeValue"),
   instantPreviewCanvas: document.getElementById("instantPreview"),
   previewStatus: document.getElementById("previewStatus"),
+  previewScrubber: document.getElementById("previewScrubber"),
+  previewTimecode: document.getElementById("previewTimecode"),
 };
 
 const DEFAULT_SETTINGS = {
@@ -41,6 +43,7 @@ const previewState = {
   pixelCanvas: null,
   pixelCtx: null,
   pixelBlock: 1,
+  userScrubbing: false,
 };
 
 function setPreviewStatus(message) {
@@ -49,7 +52,29 @@ function setPreviewStatus(message) {
   }
 }
 
+function setPreviewControlsEnabled(enabled) {
+  if (elements.previewScrubber) {
+    elements.previewScrubber.disabled = !enabled;
+    if (!enabled) {
+      elements.previewScrubber.value = "0";
+    }
+  }
+  if (!enabled) {
+    setPreviewTimecode(0, 0);
+  }
+}
+
+function setPreviewTimecode(current, duration) {
+  if (!elements.previewTimecode) {
+    return;
+  }
+  elements.previewTimecode.textContent = `${formatTime(current)} / ${formatTime(
+    duration
+  )}`;
+}
+
 setPreviewStatus("Select a video to see a quick preview.");
+setPreviewControlsEnabled(false);
 
 const GPU_SUPPORTED_ALGORITHMS = new Set(["ordered", "none"]);
 
@@ -102,6 +127,7 @@ elements.generateBtn.addEventListener("click", async () => {
 elements.resetBtn.addEventListener("click", () => resetWorkspace());
 
 initializeEffectControls();
+initializePreviewControls();
 
 function refreshControls() {
   elements.generateBtn.disabled =
@@ -172,6 +198,49 @@ function initializeEffectControls() {
   });
 }
 
+function initializePreviewControls() {
+  const scrubber = elements.previewScrubber;
+  if (!scrubber) {
+    return;
+  }
+
+  const endScrub = () => {
+    if (!previewState.userScrubbing) {
+      return;
+    }
+    previewState.userScrubbing = false;
+    commitPreviewScrub();
+  };
+
+  scrubber.addEventListener("pointerdown", () => {
+    previewState.userScrubbing = true;
+  });
+  scrubber.addEventListener("pointerup", endScrub);
+  scrubber.addEventListener("pointercancel", endScrub);
+  scrubber.addEventListener("mouseup", endScrub);
+  scrubber.addEventListener("touchend", endScrub);
+  scrubber.addEventListener("touchcancel", endScrub);
+  scrubber.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      commitPreviewScrub();
+    }
+  });
+  scrubber.addEventListener("change", () => {
+    commitPreviewScrub();
+  });
+  scrubber.addEventListener("input", () => {
+    if (!previewState.videoEl || !Number.isFinite(previewState.videoEl.duration)) {
+      return;
+    }
+    const duration = previewState.videoEl.duration || 0;
+    const target = sliderValueToTime(Number(scrubber.value || "0"), duration);
+    setPreviewTimecode(target, duration);
+    if (!previewState.userScrubbing) {
+      commitPreviewScrub();
+    }
+  });
+}
+
 function syncEffectSettingOutputs() {
   if (elements.detailValue && elements.detailInput) {
     elements.detailValue.textContent = `${elements.detailInput.value}%`;
@@ -224,6 +293,11 @@ async function startInstantPreviewPlayback() {
   }
 
   fitPreviewCanvasToVideo(video);
+  setPreviewControlsEnabled(true);
+  if (elements.previewScrubber) {
+    elements.previewScrubber.value = "0";
+  }
+  setPreviewTimecode(0, video.duration || 0);
 
   previewState.videoEl = video;
   previewState.sourceUrl = url;
@@ -272,6 +346,7 @@ function stopInstantPreviewPlayback(message) {
   if (typeof message === "string") {
     setPreviewStatus(message);
   }
+  setPreviewControlsEnabled(false);
 }
 
 function cancelPreviewFrame() {
@@ -342,6 +417,9 @@ function drawInstantPreviewFrame() {
     algorithm: settings.algorithm,
     mix: settings.mix,
   });
+
+  const duration = previewState.videoEl.duration || 0;
+  updatePreviewScrubberPosition(previewState.videoEl.currentTime, duration);
 }
 
 function ensurePreviewPixelBuffers(width, height, pixelBlock) {
@@ -383,6 +461,45 @@ function fitPreviewCanvasToVideo(video) {
   const height = Math.max(90, Math.round(width / aspect));
   canvas.width = width;
   canvas.height = height;
+}
+
+function updatePreviewScrubberPosition(currentTime, duration) {
+  setPreviewTimecode(currentTime, duration);
+  if (
+    !elements.previewScrubber ||
+    duration <= 0 ||
+    previewState.userScrubbing
+  ) {
+    return;
+  }
+  const sliderValue = timeToSliderValue(currentTime, duration);
+  elements.previewScrubber.value = sliderValue.toString();
+}
+
+function commitPreviewScrub() {
+  if (!previewState.videoEl || !elements.previewScrubber) {
+    previewState.pendingScrubTime = null;
+    return;
+  }
+  const duration = previewState.videoEl.duration || 0;
+  const value = Number(elements.previewScrubber.value || "0");
+  const target = sliderValueToTime(value, duration);
+  seekPreviewVideo(target);
+}
+
+function seekPreviewVideo(time) {
+  if (!previewState.videoEl || !Number.isFinite(time)) {
+    return;
+  }
+  const duration = previewState.videoEl.duration || 0;
+  const maxTime = duration > 0 ? Math.max(0, duration - 0.02) : undefined;
+  const clamped =
+    duration > 0 ? Math.max(0, Math.min(maxTime ?? duration, time)) : Math.max(0, time);
+  try {
+    previewState.videoEl.currentTime = clamped;
+  } catch {
+    /* ignore */
+  }
 }
 
 async function runDitherPipeline() {
@@ -611,6 +728,32 @@ function clamp01(value) {
     return 0;
   }
   return Math.max(0, Math.min(1, value));
+}
+
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    seconds = 0;
+  }
+  const totalSeconds = Math.floor(seconds);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function sliderValueToTime(value, duration) {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return 0;
+  }
+  const ratio = Math.max(0, Math.min(1, value / 1000));
+  return ratio * duration;
+}
+
+function timeToSliderValue(time, duration) {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return 0;
+  }
+  const ratio = Math.max(0, Math.min(1, time / duration));
+  return Math.round(ratio * 1000);
 }
 
 function supportsWorkerRendering() {
