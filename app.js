@@ -36,8 +36,9 @@ const state = {
 
 const previewState = {
   ctx:
-    elements.instantPreviewCanvas?.getContext("2d", { willReadFrequently: true }) ??
-    null,
+    elements.instantPreviewCanvas?.getContext("2d", {
+      willReadFrequently: true,
+    }) ?? null,
   videoEl: null,
   sourceUrl: null,
   frameHandle: null,
@@ -94,10 +95,22 @@ setPreviewStatus("Select a video to see a quick preview.");
 setPreviewControlsEnabled(false);
 
 const BAYER_MATRIX = [
-  0, 8, 2, 10, //
-  12, 4, 14, 6, //
-  3, 11, 1, 9, //
-  15, 7, 13, 5,
+  0,
+  8,
+  2,
+  10, //
+  12,
+  4,
+  14,
+  6, //
+  3,
+  11,
+  1,
+  9, //
+  15,
+  7,
+  13,
+  5,
 ];
 
 elements.videoInput.addEventListener("change", (event) => {
@@ -108,6 +121,7 @@ elements.videoInput.addEventListener("change", (event) => {
       : "Video removed. Select new files to continue."
   );
   refreshControls();
+
   if (state.videoFile) {
     startInstantPreviewPlayback().catch((error) => {
       console.warn("Instant preview playback failed", error);
@@ -122,6 +136,7 @@ elements.generateBtn.addEventListener("click", async () => {
   if (!state.videoFile || state.processing) {
     return;
   }
+
   try {
     state.processing = true;
     refreshControls();
@@ -145,9 +160,13 @@ initializeEffectControls();
 initializePreviewControls();
 
 function refreshControls() {
-  elements.generateBtn.disabled =
-    state.processing || !state.videoFile;
-  elements.resetBtn.disabled = state.processing && !state.outputUrl;
+  if (elements.generateBtn) {
+    elements.generateBtn.disabled = state.processing || !state.videoFile;
+  }
+  if (elements.resetBtn) {
+    elements.resetBtn.disabled =
+      state.processing || (!state.videoFile && !state.outputUrl);
+  }
 }
 
 function updateStatus(message) {
@@ -155,6 +174,10 @@ function updateStatus(message) {
 }
 
 function updateProgress(percent) {
+  if (!elements.progressBar) {
+    return;
+  }
+
   const clamped = Math.max(0, Math.min(100, percent));
   elements.progressBar.style.width = `${clamped}%`;
   elements.progressBar.parentElement?.setAttribute(
@@ -172,9 +195,13 @@ function resetWorkspace() {
     URL.revokeObjectURL(state.outputUrl);
     state.outputUrl = null;
   }
-  elements.videoInput.value = "";
-  elements.downloadLink.hidden = true;
-  elements.downloadLink.removeAttribute("href");
+  if (elements.videoInput) {
+    elements.videoInput.value = "";
+  }
+  if (elements.downloadLink) {
+    elements.downloadLink.hidden = true;
+    elements.downloadLink.removeAttribute("href");
+  }
   updateStatus("Workspace cleared. Select a video to begin.");
   updateProgress(0);
   refreshControls();
@@ -194,7 +221,9 @@ function initializeEffectControls() {
   elements.algorithmSelect.value = DEFAULT_SETTINGS.algorithm;
   elements.detailInput.value = String(Math.round(DEFAULT_SETTINGS.mix * 100));
   elements.pixelSizeInput.value = String(DEFAULT_SETTINGS.pixelSize);
-  elements.brightnessInput.value = String(Math.round(DEFAULT_SETTINGS.brightness * 100));
+  elements.brightnessInput.value = String(
+    Math.round(DEFAULT_SETTINGS.brightness * 100)
+  );
   syncEffectSettingOutputs();
   applyEffectSettingsFromInputs();
 
@@ -249,7 +278,10 @@ function initializePreviewControls() {
     commitPreviewScrub();
   });
   scrubber.addEventListener("input", () => {
-    if (!previewState.videoEl || !Number.isFinite(previewState.videoEl.duration)) {
+    if (
+      !previewState.videoEl ||
+      !Number.isFinite(previewState.videoEl.duration)
+    ) {
       return;
     }
     const duration = previewState.videoEl.duration || 0;
@@ -597,7 +629,9 @@ function seekPreviewVideo(time) {
   const duration = previewState.videoEl.duration || 0;
   const maxTime = duration > 0 ? Math.max(0, duration - 0.02) : undefined;
   const clamped =
-    duration > 0 ? Math.max(0, Math.min(maxTime ?? duration, time)) : Math.max(0, time);
+    duration > 0
+      ? Math.max(0, Math.min(maxTime ?? duration, time))
+      : Math.max(0, time);
   if (Math.abs((previewState.videoEl.currentTime ?? 0) - clamped) < 0.01) {
     return Promise.resolve();
   }
@@ -636,25 +670,46 @@ async function runDitherPipeline() {
   updateStatus("Initializing pipeline...");
   updateProgress(5);
 
+  if (state.outputUrl) {
+    URL.revokeObjectURL(state.outputUrl);
+    state.outputUrl = null;
+  }
+  if (elements.downloadLink) {
+    elements.downloadLink.hidden = true;
+    elements.downloadLink.removeAttribute("href");
+  }
+
   const videoUrl = URL.createObjectURL(state.videoFile);
   const hiddenVideo = createHiddenMediaElement("video", videoUrl);
   document.body.append(hiddenVideo);
 
   let audioTap = null;
+  const restorePreview = previewState.ctx
+    ? suspendInstantPreviewForExport()
+    : async () => {};
 
   try {
     await waitForEvent(hiddenVideo, "loadedmetadata");
 
-    const canvas = document.createElement("canvas");
-    canvas.width = hiddenVideo.videoWidth;
-    canvas.height = hiddenVideo.videoHeight;
+    const renderCanvas =
+      previewState.ctx && elements.instantPreviewCanvas
+        ? elements.instantPreviewCanvas
+        : document.createElement("canvas");
+    const ctx =
+      previewState.ctx && renderCanvas === elements.instantPreviewCanvas
+        ? previewState.ctx
+        : renderCanvas.getContext("2d", { willReadFrequently: true });
 
-    const useWorker = shouldUseWorker(state.settings);
-    const ctx = useWorker
-      ? null
-      : canvas.getContext("2d", { willReadFrequently: true });
-    if (!useWorker && !ctx) {
+    if (!ctx) {
       throw new Error("Unable to acquire 2D canvas context.");
+    }
+
+    if (renderCanvas !== elements.instantPreviewCanvas) {
+      const referenceCanvas = elements.instantPreviewCanvas;
+      renderCanvas.width =
+        referenceCanvas?.width || hiddenVideo.videoWidth || 640;
+      renderCanvas.height =
+        referenceCanvas?.height || hiddenVideo.videoHeight || 360;
     }
 
     try {
@@ -663,7 +718,7 @@ async function runDitherPipeline() {
       console.warn("Audio capture unavailable, output will be silent.", error);
     }
 
-    const canvasStream = canvas.captureStream(
+    const canvasStream = renderCanvas.captureStream(
       Math.min(60, hiddenVideo.frameRate || 30)
     );
     const combinedStream = new MediaStream([
@@ -680,30 +735,25 @@ async function runDitherPipeline() {
       throw new Error("No supported MediaRecorder mime type was found.");
     }
 
-    let recorder = null;
-    let recordingDone = null;
+    const recorder = new MediaRecorder(combinedStream, { mimeType });
+    const recordedChunks = [];
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data && event.data.size > 0) {
+        recordedChunks.push(event.data);
+      }
+    });
+
+    const recordingDone = new Promise((resolve) => {
+      recorder.addEventListener(
+        "stop",
+        () =>
+          resolve(new Blob(recordedChunks, { type: recorder.mimeType || mimeType })),
+        { once: true }
+      );
+    });
+
     let outputBlob = null;
-
     try {
-      recorder = new MediaRecorder(combinedStream, { mimeType });
-      const recordedChunks = [];
-      recorder.addEventListener("dataavailable", (event) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunks.push(event.data);
-        }
-      });
-
-      recordingDone = new Promise((resolve) => {
-        recorder.addEventListener(
-          "stop",
-          () =>
-            resolve(
-              new Blob(recordedChunks, { type: recorder.mimeType || mimeType })
-            ),
-          { once: true }
-        );
-      });
-
       hiddenVideo.currentTime = 0;
       hiddenVideo.muted = true;
       await hiddenVideo.play();
@@ -712,65 +762,28 @@ async function runDitherPipeline() {
       updateStatus("Rendering frames with custom dither...");
 
       const effectConfig = { ...state.settings };
-
-      if (useWorker) {
-        try {
-          await renderFramesWithWorker({
-            videoEl: hiddenVideo,
-            canvas,
-            options: effectConfig,
-            onProgress: (ratio) => updateProgress(5 + ratio * 85),
-          });
-        } catch (workerError) {
-          console.warn(
-            "Worker pipeline failed, falling back to main-thread renderer.",
-            workerError
-          );
-          await renderFramesOnMainThread({
-            videoEl: hiddenVideo,
-            ctx: canvas.getContext("2d", { willReadFrequently: true }),
-            options: effectConfig,
-            onProgress: (ratio) => updateProgress(5 + ratio * 85),
-          });
-        }
-      } else {
-        await renderFramesOnMainThread({
-          videoEl: hiddenVideo,
-          ctx,
-          options: effectConfig,
-          onProgress: (ratio) => updateProgress(5 + ratio * 85),
-        });
-      }
+      await renderFramesOnMainThread({
+        videoEl: hiddenVideo,
+        ctx,
+        options: effectConfig,
+        onProgress: (ratio) => updateProgress(5 + ratio * 85),
+      });
 
       hiddenVideo.pause();
       recorder.stop();
       outputBlob = await recordingDone;
     } finally {
-      try {
-        hiddenVideo.pause();
-      } catch {
-        /* ignore */
-      }
-      if (recorder && recorder.state !== "inactive") {
+      if (recorder.state !== "inactive") {
         try {
           recorder.stop();
         } catch {
           /* ignore */
         }
       }
-      if (recordingDone) {
-        try {
-          await recordingDone;
-        } catch {
-          /* ignore */
-        }
-      }
-      if (audioTap?.dispose) {
-        try {
-          await audioTap.dispose();
-        } catch {
-          /* ignore */
-        }
+      try {
+        await recordingDone;
+      } catch {
+        /* ignore */
       }
     }
 
@@ -782,9 +795,54 @@ async function runDitherPipeline() {
     updateStatus("Done! Preview ready below.");
     displayResult(outputBlob);
   } finally {
+    await restorePreview();
+    try {
+      hiddenVideo.pause();
+    } catch {
+      /* ignore */
+    }
     hiddenVideo.remove();
     URL.revokeObjectURL(videoUrl);
+    if (audioTap?.dispose) {
+      try {
+        await audioTap.dispose();
+      } catch {
+        /* ignore */
+      }
+    }
   }
+}
+
+function suspendInstantPreviewForExport() {
+  if (!previewState.running || !previewState.videoEl) {
+    return async () => {};
+  }
+  const wasPlaying = previewState.playing;
+  const previousStatus = elements.previewStatus?.textContent ?? "";
+  cancelPreviewFrame();
+  previewState.playing = false;
+  try {
+    previewState.videoEl.pause();
+  } catch {
+    /* ignore */
+  }
+  setPreviewStatus("Rendering export…");
+  return async () => {
+    if (!previewState.videoEl) {
+      setPreviewStatus(previousStatus);
+      return;
+    }
+    if (wasPlaying) {
+      try {
+        await resumePreviewPlayback();
+      } catch {
+        setPreviewStatus("Preview unavailable.");
+      }
+    } else {
+      setPreviewStatus(previousStatus);
+      refreshPreviewFrameIfIdle();
+    }
+  };
 }
 
 function createHiddenMediaElement(tag, src) {
@@ -891,119 +949,6 @@ function refreshPreviewFrameIfIdle() {
   }
 }
 
-function supportsWorkerRendering() {
-  return (
-    typeof Worker !== "undefined" &&
-    typeof OffscreenCanvas !== "undefined" &&
-    typeof createImageBitmap === "function" &&
-    typeof HTMLCanvasElement !== "undefined" &&
-    typeof HTMLCanvasElement.prototype.transferControlToOffscreen === "function"
-  );
-}
-
-function shouldUseWorker() {
-  return supportsWorkerRendering();
-}
-
-async function renderFramesWithWorker({ videoEl, canvas, options, onProgress }) {
-  return new Promise((resolve, reject) => {
-    let cancelled = false;
-    const worker = new Worker("ditherWorker.js");
-    let rafId = 0;
-    let workerReady = false;
-    let workerBusy = false;
-
-    const cleanup = () => {
-      if (rafId) {
-        cancelAnimationFrame(rafId);
-        rafId = 0;
-      }
-      worker.terminate();
-      cancelled = true;
-    };
-
-    worker.addEventListener("message", (event) => {
-      if (cancelled) {
-        return;
-      }
-      const { type, progress, done, error } = event.data || {};
-      if (type === "ready") {
-        workerReady = true;
-        rafId = requestAnimationFrame(pump);
-      } else if (type === "frameRendered") {
-        workerBusy = false;
-        onProgress?.(progress ?? 0);
-        if (done || videoEl.ended) {
-          cleanup();
-          resolve();
-        } else {
-          rafId = requestAnimationFrame(pump);
-        }
-      } else if (type === "finished") {
-        cleanup();
-        resolve();
-      } else if (type === "error") {
-        cleanup();
-        reject(new Error(error ?? "Worker rendering failed."));
-      }
-    });
-
-    const pump = () => {
-      if (cancelled) {
-        return;
-      }
-      if (!workerReady || workerBusy) {
-        rafId = requestAnimationFrame(pump);
-        return;
-      }
-      if (videoEl.ended) {
-        worker.postMessage({ type: "finish" });
-        return;
-      }
-      if (videoEl.paused) {
-        rafId = requestAnimationFrame(pump);
-        return;
-      }
-
-      workerBusy = true;
-      createImageBitmap(videoEl)
-        .then((bitmap) => {
-          worker.postMessage(
-            {
-              type: "frame",
-              bitmap,
-              currentTime: videoEl.currentTime,
-              duration: videoEl.duration || 0,
-            },
-            [bitmap]
-          );
-        })
-        .catch((error) => {
-          workerBusy = false;
-          cleanup();
-          reject(error);
-        });
-    };
-
-    try {
-      const offscreen = canvas.transferControlToOffscreen();
-      worker.postMessage(
-        {
-          type: "init",
-          canvas: offscreen,
-          width: canvas.width,
-          height: canvas.height,
-          options,
-        },
-        [offscreen]
-      );
-    } catch (error) {
-      cleanup();
-      reject(error);
-    }
-  });
-}
-
 async function renderFramesOnMainThread({ videoEl, ctx, options, onProgress }) {
   const width = ctx.canvas.width;
   const height = ctx.canvas.height;
@@ -1096,12 +1041,19 @@ function drawFrameWithPixelation({
   }
 }
 
-function applyDitherPipeline(ctx, width, height, { algorithm, mix, brightness }) {
+function applyDitherPipeline(
+  ctx,
+  width,
+  height,
+  { algorithm, mix, brightness }
+) {
   if (!algorithm) {
     return;
   }
   const image = ctx.getImageData(0, 0, width, height);
-  const bright = Number.isFinite(brightness) ? brightness : DEFAULT_SETTINGS.brightness;
+  const bright = Number.isFinite(brightness)
+    ? brightness
+    : DEFAULT_SETTINGS.brightness;
   if (bright !== 1) {
     applyBrightness(image, bright);
   }
@@ -1208,6 +1160,9 @@ function displayResult(blob) {
   }
   const url = URL.createObjectURL(blob);
   state.outputUrl = url;
-  elements.downloadLink.href = url;
-  elements.downloadLink.hidden = false;
+  if (elements.downloadLink) {
+    elements.downloadLink.href = url;
+    elements.downloadLink.download = "dithered-video.webm";
+    elements.downloadLink.hidden = false;
+  }
 }

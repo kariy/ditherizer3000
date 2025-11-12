@@ -36,7 +36,7 @@ All processing happens locally in the browser—no files ever leave your machine
 
 ## Notes & Limitations
 
-- Ordered and no-dither modes use WebGL2/WebGL inside a worker for speed. Floyd–Steinberg reverts to the CPU path, so it will still be slower, though the instant preview remains fast due to its tiny resolution.
+- Exported videos use the same low-res canvas as the instant preview, so what you download is exactly what you saw (expect ~400px wide output). Rendering runs on the CPU for fidelity; Floyd–Steinberg is heavier, so longer clips may take a bit.
 - Dithering is CPU/GPU heavy. For 4K/60fps clips, prefer a desktop browser.
 - MediaRecorder typically outputs WebM. Convert to other formats if needed via ffmpeg after download.
 - Keep the browser tab focused while processing; throttled tabs can stall `requestAnimationFrame`.
